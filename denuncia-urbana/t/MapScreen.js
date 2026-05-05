@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
 import {
   View, TouchableOpacity, ScrollView,
   Text, StyleSheet, ActivityIndicator,
@@ -8,7 +8,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { CATEGORIES, getCategoryById } from './categories';
 import { COLORS, RADIUS } from './theme';
 
-// Monta o HTML do Google Maps com suporte a markers e clique no mapa
 function buildMapHTML({ region, reports, pinPlacementMode }) {
   const markersJS = reports
     .map((r) => {
@@ -52,6 +51,8 @@ function buildMapHTML({ region, reports, pinPlacementMode }) {
 <body>
   <div id="map"></div>
   <script>
+    var highlightMarker = null;
+
     function initMap() {
       var map = new google.maps.Map(document.getElementById('map'), {
         center: { lat: ${region.latitude}, lng: ${region.longitude} },
@@ -60,7 +61,6 @@ function buildMapHTML({ region, reports, pinPlacementMode }) {
         gestureHandling: 'greedy',
       });
 
-      // Clique no mapa
       map.addListener('click', function(e) {
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'mapPress',
@@ -69,7 +69,6 @@ function buildMapHTML({ region, reports, pinPlacementMode }) {
         }));
       });
 
-      // Envia região ao mover
       map.addListener('idle', function() {
         var c = map.getCenter();
         window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -79,37 +78,66 @@ function buildMapHTML({ region, reports, pinPlacementMode }) {
         }));
       });
 
-      // Recebe mensagens do RN (ex: ir para localização)
       window.goToLocation = function(lat, lng) {
         map.panTo({ lat: lat, lng: lng });
         map.setZoom(16);
       };
 
+      // Centraliza no local da denúncia com anel de destaque
+      window.focusReport = function(lat, lng) {
+        map.panTo({ lat: lat, lng: lng });
+        map.setZoom(17);
+
+        if (highlightMarker) { highlightMarker.setMap(null); highlightMarker = null; }
+
+        highlightMarker = new google.maps.Marker({
+          position: { lat: lat, lng: lng },
+          map: map,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 22,
+            fillColor: '#FFFFFF',
+            fillOpacity: 0.25,
+            strokeColor: '#FFFFFF',
+            strokeWeight: 3,
+          },
+          zIndex: 999,
+        });
+
+        setTimeout(function() {
+          if (highlightMarker) { highlightMarker.setMap(null); highlightMarker = null; }
+        }, 3000);
+      };
+
       ${markersJS}
     }
   </script>
-  <script
-    src="https://maps.googleapis.com/maps/api/js?callback=initMap"
-    async defer>
-  </script>
+  <script src="https://maps.googleapis.com/maps/api/js?callback=initMap" async defer></script>
 </body>
 </html>
   `;
 }
 
-export default function MapScreen({
+const MapScreen = forwardRef(function MapScreen({
   region, setRegion, location, reports,
   pinPlacementMode, setPinPlacementMode,
   onMapPress, onMarkerPress, onAddPress,
-}) {
+}, ref) {
   const webRef = useRef(null);
   const [mapReady, setMapReady] = useState(false);
-  // Rebuilds the map HTML whenever reports or mode changes
   const [html, setHtml] = useState('');
 
   useEffect(() => {
     setHtml(buildMapHTML({ region, reports, pinPlacementMode }));
   }, [reports, pinPlacementMode]);
+
+  useImperativeHandle(ref, () => ({
+    focusReport(lat, lng) {
+      if (webRef.current) {
+        webRef.current.injectJavaScript(`window.focusReport(${lat}, ${lng}); true;`);
+      }
+    },
+  }));
 
   function goToMyLocation() {
     if (location && webRef.current) {
@@ -122,16 +150,13 @@ export default function MapScreen({
   function handleMessage(e) {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
-
       if (msg.type === 'mapPress') {
         onMapPress({ nativeEvent: { coordinate: { latitude: msg.lat, longitude: msg.lng } } });
       }
-
       if (msg.type === 'markerPress') {
         const report = reports.find((r) => r.id === msg.id);
         if (report) onMarkerPress(report);
       }
-
       if (msg.type === 'regionChange') {
         setRegion((prev) => ({ ...prev, latitude: msg.lat, longitude: msg.lng }));
       }
@@ -140,7 +165,6 @@ export default function MapScreen({
 
   return (
     <View style={styles.container}>
-      {/* Mapa via WebView */}
       {html ? (
         <WebView
           ref={webRef}
@@ -158,14 +182,12 @@ export default function MapScreen({
         </View>
       )}
 
-      {/* Loading overlay */}
       {!mapReady && html ? (
         <View style={styles.mapPlaceholder}>
           <ActivityIndicator size="large" color={COLORS.primary} />
         </View>
       ) : null}
 
-      {/* Banner modo pin */}
       {pinPlacementMode && (
         <View style={styles.pinBanner}>
           <Ionicons name="location-outline" size={18} color="#FFF" />
@@ -176,7 +198,6 @@ export default function MapScreen({
         </View>
       )}
 
-      {/* Contador de denúncias */}
       {reports.length > 0 && (
         <View style={styles.countBadge}>
           <Text style={styles.countText}>
@@ -185,12 +206,10 @@ export default function MapScreen({
         </View>
       )}
 
-      {/* Botão minha localização */}
       <TouchableOpacity style={styles.myLocBtn} onPress={goToMyLocation}>
         <Ionicons name="locate" size={22} color={COLORS.primary} />
       </TouchableOpacity>
 
-      {/* Legenda de categorias */}
       <View style={styles.legend}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           {CATEGORIES.map((cat) => (
@@ -202,13 +221,14 @@ export default function MapScreen({
         </ScrollView>
       </View>
 
-      {/* FAB adicionar */}
       <TouchableOpacity style={styles.fab} onPress={onAddPress} activeOpacity={0.85}>
         <Ionicons name="add" size={30} color="#FFF" />
       </TouchableOpacity>
     </View>
   );
-}
+});
+
+export default MapScreen;
 
 const styles = StyleSheet.create({
   container: { flex: 1 },

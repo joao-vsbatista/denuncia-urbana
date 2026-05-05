@@ -19,12 +19,30 @@ export default function App() {
   const [pinMode, setPinMode]         = useState(false);
   const [submitting, setSubmitting]   = useState(false);
   const pinCallbackRef                = useRef(null);
+  const mapRef                        = useRef(null); // ref para o MapScreen
 
   const { location, region, setRegion, loading: locationLoading } = useLocation();
   const { reports, loading: reportsLoading, error, addReport, updateStatus, refetch } = useReports();
 
   function navigate(target) { setScreen(target); }
   function openReport(report) { setSelected(report); setModal(true); }
+
+  // Ao clicar numa denúncia da lista:
+  // 1. Vai para a tela do mapa
+  // 2. Centraliza e destaca o local no mapa
+  // 3. Abre o modal com os detalhes
+  function handleSelectReportFromList(report) {
+    setScreen('map');
+    setTimeout(() => {
+      if (report.coordinate && mapRef.current) {
+        mapRef.current.focusReport(
+          report.coordinate.latitude,
+          report.coordinate.longitude
+        );
+      }
+      openReport(report);
+    }, 350); // aguarda a tela do mapa montar
+  }
 
   function handlePickLocation(callback) {
     pinCallbackRef.current = callback;
@@ -89,6 +107,7 @@ export default function App() {
 
       {screen === 'map' && (
         <MapScreen
+          ref={mapRef}
           region={region}
           setRegion={setRegion}
           location={location}
@@ -115,7 +134,7 @@ export default function App() {
         <ListScreen
           reports={reports}
           loading={reportsLoading}
-          onSelectReport={(r) => { setScreen('map'); setTimeout(() => openReport(r), 300); }}
+          onSelectReport={handleSelectReportFromList}
           onRefresh={refetch}
         />
       )}
