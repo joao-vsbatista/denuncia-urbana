@@ -18,8 +18,12 @@ export default function App() {
   const [modalVisible, setModal]      = useState(false);
   const [pinMode, setPinMode]         = useState(false);
   const [submitting, setSubmitting]   = useState(false);
-  const pinCallbackRef                = useRef(null);
-  const mapRef                        = useRef(null); // ref para o MapScreen
+
+  // Guarda o pinLocation aqui no App para não perder ao trocar de tela
+  const [pinLocation, setPinLocation] = useState(null);
+
+  const pinCallbackRef = useRef(null);
+  const mapRef         = useRef(null);
 
   const { location, region, setRegion, loading: locationLoading } = useLocation();
   const { reports, loading: reportsLoading, error, addReport, updateStatus, refetch } = useReports();
@@ -27,10 +31,7 @@ export default function App() {
   function navigate(target) { setScreen(target); }
   function openReport(report) { setSelected(report); setModal(true); }
 
-  // Ao clicar numa denúncia da lista:
-  // 1. Vai para a tela do mapa
-  // 2. Centraliza e destaca o local no mapa
-  // 3. Abre o modal com os detalhes
+  // Clique numa denúncia da lista → vai ao mapa, foca o local, abre modal
   function handleSelectReportFromList(report) {
     setScreen('map');
     setTimeout(() => {
@@ -41,21 +42,25 @@ export default function App() {
         );
       }
       openReport(report);
-    }, 350); // aguarda a tela do mapa montar
+    }, 350);
   }
 
+  // Usuário quer marcar local no mapa → vai para o mapa em modo pin
   function handlePickLocation(callback) {
     pinCallbackRef.current = callback;
     setPinMode(true);
     setScreen('map');
   }
 
+  // Usuário tocou no mapa em modo pin → salva coordenada e volta ao formulário
   function handleMapPress(e) {
     if (pinMode && pinCallbackRef.current) {
-      pinCallbackRef.current(e.nativeEvent.coordinate);
+      const coord = e.nativeEvent.coordinate;
+      pinCallbackRef.current(coord);
+      setPinLocation(coord);      // salva no App para não perder
       pinCallbackRef.current = null;
       setPinMode(false);
-      setScreen('report');
+      setScreen('report');        // volta ao formulário
     }
   }
 
@@ -64,6 +69,7 @@ export default function App() {
     const result = await addReport(data);
     setSubmitting(false);
     if (result) {
+      setPinLocation(null);       // limpa para próxima denúncia
       setScreen('map');
       Alert.alert('✓ Denúncia enviada!', 'Seu registro foi salvo com sucesso.');
     }
@@ -123,6 +129,7 @@ export default function App() {
       {screen === 'report' && (
         <ReportScreen
           location={location}
+          initialPinLocation={pinLocation}   // passa o local já escolhido no mapa
           reports={reports}
           onSubmit={handleSubmit}
           onPickLocation={handlePickLocation}

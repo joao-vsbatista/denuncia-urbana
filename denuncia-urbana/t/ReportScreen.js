@@ -127,12 +127,13 @@ function CategoryPicker({ value, onChange }) {
 
 // ─── Tela principal ────────────────────────────────────────────────────────────
 
-export default function ReportScreen({ location, reports = [], onSubmit, onPickLocation, onOpenReport }) {
+export default function ReportScreen({ location, initialPinLocation, reports = [], onSubmit, onPickLocation, onOpenReport }) {
   const [title, setTitle]           = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory]     = useState('buraco');
   const [photo, setPhoto]           = useState(null);
-  const [pinLocation, setPinLocation] = useState(location);
+  // Prioriza o local escolhido no mapa; se não houver, usa localização atual
+  const [pinLocation, setPinLocation] = useState(initialPinLocation || location);
   const [helpVisible, setHelp]      = useState(false);
   const [nearbyReports, setNearby]  = useState([]);
 

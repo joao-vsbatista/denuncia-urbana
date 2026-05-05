@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef } from 'react';
+import React, { useRef, useState, useEffect, useImperativeHandle, forwardRef, useCallback } from 'react';
 import {
   View, TouchableOpacity, ScrollView,
   Text, StyleSheet, ActivityIndicator,
@@ -8,36 +8,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { CATEGORIES, getCategoryById } from './categories';
 import { COLORS, RADIUS } from './theme';
 
-function buildMapHTML({ region, reports, pinPlacementMode }) {
-  const markersJS = reports
-    .map((r) => {
-      const cat = getCategoryById(r.category);
-      return `
-        (function() {
-          var marker = new google.maps.Marker({
-            position: { lat: ${r.coordinate.latitude}, lng: ${r.coordinate.longitude} },
-            map: map,
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 10,
-              fillColor: '${cat.color}',
-              fillOpacity: 1,
-              strokeColor: '#FFF',
-              strokeWeight: 2,
-            },
-            title: ${JSON.stringify(r.title || '')},
-          });
-          marker.addListener('click', function() {
-            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'markerPress', id: '${r.id}' }));
-          });
-        })();
-      `;
-    })
-    .join('\n');
-
-  const cursor = pinPlacementMode ? 'crosshair' : 'grab';
-
-  return `
+// HTML base do mapa — carregado UMA VEZ, sem markers embutidos
+// Os markers são enviados depois via injectJavaScript
+const MAP_HTML = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -45,17 +18,18 @@ function buildMapHTML({ region, reports, pinPlacementMode }) {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, #map { width: 100%; height: 100%; }
-    body { cursor: ${cursor}; }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <script>
+    var map;
+    var markerObjects = [];
     var highlightMarker = null;
 
     function initMap() {
-      var map = new google.maps.Map(document.getElementById('map'), {
-        center: { lat: ${region.latitude}, lng: ${region.longitude} },
+      map = new google.maps.Map(document.getElementById('map'), {
+        center: { lat: -23.55, lng: -46.63 },
         zoom: 15,
         disableDefaultUI: true,
         gestureHandling: 'greedy',
@@ -78,69 +52,138 @@ function buildMapHTML({ region, reports, pinPlacementMode }) {
         }));
       });
 
-      window.goToLocation = function(lat, lng) {
-        map.panTo({ lat: lat, lng: lng });
-        map.setZoom(16);
-      };
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'mapReady' }));
+    }
 
-      // Centraliza no local da denúncia com anel de destaque
-      window.focusReport = function(lat, lng) {
-        map.panTo({ lat: lat, lng: lng });
-        map.setZoom(17);
+    // Chamado pelo RN para atualizar todos os markers
+    window.setMarkers = function(reports) {
+      // Remove markers antigos
+      markerObjects.forEach(function(m) { m.setMap(null); });
+      markerObjects = [];
 
-        if (highlightMarker) { highlightMarker.setMap(null); highlightMarker = null; }
-
-        highlightMarker = new google.maps.Marker({
-          position: { lat: lat, lng: lng },
+      reports.forEach(function(r) {
+        var marker = new google.maps.Marker({
+          position: { lat: r.lat, lng: r.lng },
           map: map,
           icon: {
             path: google.maps.SymbolPath.CIRCLE,
-            scale: 22,
-            fillColor: '#FFFFFF',
-            fillOpacity: 0.25,
-            strokeColor: '#FFFFFF',
-            strokeWeight: 3,
+            scale: 10,
+            fillColor: r.color,
+            fillOpacity: 1,
+            strokeColor: '#FFF',
+            strokeWeight: 2,
           },
-          zIndex: 999,
+          title: r.title,
         });
+        marker.addListener('click', function() {
+          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'markerPress', id: r.id }));
+        });
+        markerObjects.push(marker);
+      });
+    };
 
-        setTimeout(function() {
-          if (highlightMarker) { highlightMarker.setMap(null); highlightMarker = null; }
-        }, 3000);
-      };
+    // Centraliza no local do usuário
+    window.goToLocation = function(lat, lng) {
+      map.panTo({ lat: lat, lng: lng });
+      map.setZoom(16);
+    };
 
-      ${markersJS}
-    }
+    // Centraliza e destaca uma denúncia específica
+    window.focusReport = function(lat, lng) {
+      map.panTo({ lat: lat, lng: lng });
+      map.setZoom(17);
+
+      if (highlightMarker) { highlightMarker.setMap(null); highlightMarker = null; }
+
+      highlightMarker = new google.maps.Marker({
+        position: { lat: lat, lng: lng },
+        map: map,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 22,
+          fillColor: '#FFFFFF',
+          fillOpacity: 0.3,
+          strokeColor: '#FFFFFF',
+          strokeWeight: 3,
+        },
+        zIndex: 999,
+      });
+
+      setTimeout(function() {
+        if (highlightMarker) { highlightMarker.setMap(null); highlightMarker = null; }
+      }, 3000);
+    };
+
+    // Muda o cursor (modo pin)
+    window.setCursor = function(crosshair) {
+      document.body.style.cursor = crosshair ? 'crosshair' : 'grab';
+    };
+
+    // Move o centro do mapa
+    window.setCenter = function(lat, lng, zoom) {
+      map.panTo({ lat: lat, lng: lng });
+      if (zoom) map.setZoom(zoom);
+    };
   </script>
   <script src="https://maps.googleapis.com/maps/api/js?callback=initMap" async defer></script>
 </body>
 </html>
-  `;
-}
+`;
 
 const MapScreen = forwardRef(function MapScreen({
   region, setRegion, location, reports,
   pinPlacementMode, setPinPlacementMode,
   onMapPress, onMarkerPress, onAddPress,
 }, ref) {
-  const webRef = useRef(null);
+  const webRef   = useRef(null);
   const [mapReady, setMapReady] = useState(false);
-  const [html, setHtml] = useState('');
 
+  // Envia markers ao WebView sempre que reports mudar e o mapa estiver pronto
+  const sendMarkers = useCallback((reps) => {
+    if (!webRef.current || !mapReady) return;
+    const payload = reps.map((r) => ({
+      id:    r.id,
+      lat:   r.coordinate.latitude,
+      lng:   r.coordinate.longitude,
+      color: getCategoryById(r.category).color,
+      title: r.title || '',
+    }));
+    webRef.current.injectJavaScript(
+      `window.setMarkers(${JSON.stringify(payload)}); true;`
+    );
+  }, [mapReady]);
+
+  // Reenvia markers toda vez que mudam
   useEffect(() => {
-    setHtml(buildMapHTML({ region, reports, pinPlacementMode }));
-  }, [reports, pinPlacementMode]);
+    if (mapReady) sendMarkers(reports);
+  }, [reports, mapReady, sendMarkers]);
+
+  // Atualiza cursor ao mudar modo pin
+  useEffect(() => {
+    if (mapReady && webRef.current) {
+      webRef.current.injectJavaScript(`window.setCursor(${pinPlacementMode}); true;`);
+    }
+  }, [pinPlacementMode, mapReady]);
+
+  // Centraliza o mapa ao receber nova region (só na primeira vez)
+  useEffect(() => {
+    if (mapReady && webRef.current && region) {
+      webRef.current.injectJavaScript(
+        `window.setCenter(${region.latitude}, ${region.longitude}); true;`
+      );
+    }
+  }, [mapReady]); // só na montagem
 
   useImperativeHandle(ref, () => ({
     focusReport(lat, lng) {
-      if (webRef.current) {
+      if (webRef.current && mapReady) {
         webRef.current.injectJavaScript(`window.focusReport(${lat}, ${lng}); true;`);
       }
     },
   }));
 
   function goToMyLocation() {
-    if (location && webRef.current) {
+    if (location && webRef.current && mapReady) {
       webRef.current.injectJavaScript(
         `window.goToLocation(${location.latitude}, ${location.longitude}); true;`
       );
@@ -150,13 +193,20 @@ const MapScreen = forwardRef(function MapScreen({
   function handleMessage(e) {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
+
+      if (msg.type === 'mapReady') {
+        setMapReady(true);
+      }
+
       if (msg.type === 'mapPress') {
         onMapPress({ nativeEvent: { coordinate: { latitude: msg.lat, longitude: msg.lng } } });
       }
+
       if (msg.type === 'markerPress') {
         const report = reports.find((r) => r.id === msg.id);
         if (report) onMarkerPress(report);
       }
+
       if (msg.type === 'regionChange') {
         setRegion((prev) => ({ ...prev, latitude: msg.lat, longitude: msg.lng }));
       }
@@ -165,28 +215,21 @@ const MapScreen = forwardRef(function MapScreen({
 
   return (
     <View style={styles.container}>
-      {html ? (
-        <WebView
-          ref={webRef}
-          style={styles.map}
-          source={{ html }}
-          onMessage={handleMessage}
-          onLoad={() => setMapReady(true)}
-          javaScriptEnabled
-          domStorageEnabled
-          originWhitelist={['*']}
-        />
-      ) : (
+      <WebView
+        ref={webRef}
+        style={styles.map}
+        source={{ html: MAP_HTML }}
+        onMessage={handleMessage}
+        javaScriptEnabled
+        domStorageEnabled
+        originWhitelist={['*']}
+      />
+
+      {!mapReady && (
         <View style={styles.mapPlaceholder}>
           <ActivityIndicator size="large" color={COLORS.primary} />
         </View>
       )}
-
-      {!mapReady && html ? (
-        <View style={styles.mapPlaceholder}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-        </View>
-      ) : null}
 
       {pinPlacementMode && (
         <View style={styles.pinBanner}>
